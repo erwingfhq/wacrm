@@ -11,8 +11,144 @@ Estado actual de esta copia:
       claves API en `.env.local` y probadas contra la API real.
 - [x] Usuario creado en el CRM (erwingfidelio@aol.com) y dentro del dashboard
 - [x] **SMTP propio configurado y verificado** — ver "Configuración de correo" abajo
-- [ ] App de Meta / WhatsApp → **paso 3**
-- [ ] Deploy en Hostinger → **paso 4**
+- [x] **Desplegado en producción** — <https://ngsignscrm.com>
+- [~] **Meta / WhatsApp — casi listo.** Ver "WhatsApp" abajo. Falta
+      `META_APP_SECRET` en hPanel + reconstruir.
+
+## WhatsApp (estado)
+
+| Dato | Valor |
+|---|---|
+| App de Meta | **NG Signs CRM** — App ID `1019685967553848` |
+| Portfolio | `newgensignsny` (ID `1363163135090048`) |
+| Número de prueba | +1 555 161 0572 — gratis 90 días |
+| Phone Number ID | `569904559530583` |
+| WABA ID | `551603224703137` |
+| Webhook | `https://ngsignscrm.com/api/whatsapp/webhook` — verificado |
+| Campos suscritos | `messages`, `message_template_status_update`, `message_template_quality_update`, `message_template_components_update` |
+
+**Por qué este portfolio y no otro:** las dos WABAs del portfolio
+"NewGen Signs & Graphics" (IDs `500576826479939` y `2146030169670766`) están
+**inhabilitadas por Meta**, y por eso rechazaba incluso pedir un número de
+prueba. Las 4 WABAs de `newgensignsny` están sanas. Si algún día quieres
+recuperar las inhabilitadas, la vía es "Revisar mi activo inhabilitado" en el
+inicio de ayuda para empresas.
+
+**Verificado de punta a punta el 2026-08-04**: mensaje real desde
++1 347 557 6460 → webhook → firma HMAC validada → contacto, conversación y
+mensajes creados en la base de datos. La cadena completa funciona.
+
+Aprendizajes de la puesta en marcha, por si hay que repetirla:
+
+- **La app SIN publicar sí recibe webhooks de producción.** El aviso de Meta
+  sugiere lo contrario, pero los logs demuestran que entrega igualmente. No
+  perder tiempo publicando la app para "arreglar" mensajes que no llegan.
+- **`META_APP_SECRET` debe ser el de ESTA app** (`1019685967553848`), no el de
+  otra. Copiar el de la app equivocada da exactamente el mismo síntoma que no
+  ponerlo: `[webhook] rejected request with invalid signature`.
+- **Los Runtime logs de hPanel son la herramienta de diagnóstico.** Distinguen
+  entre "no llega nada" y "llega y se rechaza", que es la diferencia entre un
+  problema de Meta y uno de configuración.
+
+### Token permanente (hecho)
+
+Emitido desde el system user **`n8n-whatsapp-bot`** (ID `61569218395105`),
+para la app **NG Signs CRM**, con caducidad **Nunca** y los permisos
+`whatsapp_business_management` y `whatsapp_business_messaging`. Verificado
+contra la Graph API: lectura del número y **envío real de mensaje**, ambos 200.
+
+Copia de seguridad en `.env.whatsapp-token` (permisos 600, ignorado por git).
+Meta solo muestra el token una vez; si se pierde ese archivo hay que emitir
+uno nuevo.
+
+**Por qué se reutilizó `n8n-whatsapp-bot` y no uno dedicado:** Meta limita este
+portfolio a **1 solo usuario del sistema con rol Admin**, y ya estaba ocupado.
+Un usuario con rol Employee no puede emitir tokens de WhatsApp por muchos
+activos que se le asignen — el rol manda sobre los permisos de activo. Quedó
+un `wacrm-bot` (Employee) huérfano y sin tokens; es inofensivo y Meta no
+permite borrarlo desde el panel.
+
+⚠️ **No pulses "Revocar tokens" en `n8n-whatsapp-bot`**: revoca todos sus
+tokens de golpe, y eso ahora incluye el del CRM además del de n8n.
+
+## Agente de IA (activo)
+
+Proveedor OpenAI, modelo `gpt-5.4-mini`, clave propia cifrada con
+`ENCRYPTION_KEY`. Borrador **y** auto-respuesta activados, tope de 3
+respuestas por conversación, traspaso a `__queue__`.
+
+Probado con conversación real: cambia solo al idioma del cliente, pregunta
+de una en una y esquiva los precios. Consumo medido: **650–735 tokens por
+respuesta**, de los que más del 97% es prompt de entrada — el coste lo marca
+el system prompt (1.500 caracteres) más los 20 mensajes de contexto, no lo
+que el bot escribe.
+
+Palancas de ahorro si crece el volumen: recortar el system prompt o bajar
+`AI_CONTEXT_MESSAGE_LIMIT` de 20 a 8–10.
+
+**Precios**: el prompt distingue catálogo de trabajo a medida. Los productos
+de precio fijo (tarjetas, roll-ups, coroplast, A-frames) se cotizan **desde la
+base de conocimiento**; los trabajos a medida (channel letters, wraps,
+instalación) nunca. La regla clave es "si un precio no está en la base de
+conocimiento, no lo sabes" — sin ella el modelo extrapola de un producto
+parecido. Al cargar el catálogo, **incluye siempre medida y cantidad**: sin
+ellas aplicaría el precio del 24×36" a cualquier tamaño.
+
+Los precios viven en la base de conocimiento, no en el prompt, para poder
+actualizarlos sin tocar la configuración del agente.
+
+Límites reales del agente, para no esperar de más:
+
+- **No tiene visión.** Nunca recibe el archivo, así que no lee texto escrito
+  dentro de una imagen. Con el arreglo del contexto (commit `8a539eb`) al
+  menos sabe que hubo un adjunto y qué pie llevaba.
+- **No es un asistente interno.** Solo ve los últimos 20 mensajes de una
+  conversación. No consulta contactos, pipelines ni el estado de pedidos.
+  Si le preguntas por eso, se lo inventa — de ahí el apartado
+  "WHAT YOU DON'T KNOW" del prompt.
+- Reiniciar el contador de un hilo: `UPDATE conversations SET
+  ai_reply_count = 0 WHERE id = ...`
+
+Pendiente:
+
+- **El número de prueba caduca a los 90 días** y solo habla con destinatarios
+  registrados. Para clientes reales hace falta registrar un número propio.
+- **Dos commits sin desplegar**, a la espera de la clave SSH en GitHub:
+  `c81901a` (7 vulnerabilidades) y `8a539eb` (adjuntos en el contexto de IA).
+  Hasta desplegarlos, el bot en producción sigue repitiendo su pregunta
+  cuando el cliente responde con una foto.
+- **Mensajes duplicados en `messages`** — se observaron filas repetidas con
+  la misma marca de tiempo. Sin diagnosticar; conviene mirarlo antes de
+  atender clientes reales.
+
+## Producción (hecho)
+
+| | |
+|---|---|
+| URL | <https://ngsignscrm.com> |
+| Hosting | Hostinger, plan Business (vence 2030-03-10), sección Web Apps |
+| Repo | <https://github.com/erwingfhq/wacrm> (fork), rama `main` |
+| Node | 24.x · framework preset Next.js · raíz `/` |
+| SSL | Let's Encrypt, aprovisionado automáticamente |
+| Redespliegue | Automático en cada push a `main` |
+
+Variables cargadas en hPanel desde `.env.production` (8 en total). Ese archivo
+está en la raíz del repo local, ignorado por git.
+
+También actualizado en Supabase → Authentication → URL Configuration:
+Site URL `https://ngsignscrm.com` y redirect `https://ngsignscrm.com/**`,
+para que los enlaces de los correos dejen de apuntar a localhost.
+
+Avisos:
+
+- **`META_APP_SECRET` es todavía un placeholder.** El webhook responde 400 a
+  todo, que es lo correcto hasta configurar Meta. Hay que sustituirlo en
+  hPanel → variables de entorno **y volver a construir**.
+- **Las `NEXT_PUBLIC_*` se incrustan en el build.** Cambiarlas en hPanel no
+  surte efecto hasta que se reconstruye.
+- **Push a GitHub sin configurar.** El remoto `origin` apunta al fork, pero
+  falta un token o clave SSH; GitHub ya no acepta contraseña. Hasta entonces
+  no se pueden subir cambios locales (hay un commit pendiente de subir).
 
 ## Configuración de correo (hecha)
 
