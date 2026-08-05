@@ -86,16 +86,40 @@ que el bot escribe.
 Palancas de ahorro si crece el volumen: recortar el system prompt o bajar
 `AI_CONTEXT_MESSAGE_LIMIT` de 20 a 8–10.
 
-**Precios**: el prompt distingue catálogo de trabajo a medida. Los productos
-de precio fijo (tarjetas, roll-ups, coroplast, A-frames) se cotizan **desde la
-base de conocimiento**; los trabajos a medida (channel letters, wraps,
-instalación) nunca. La regla clave es "si un precio no está en la base de
-conocimiento, no lo sabes" — sin ella el modelo extrapola de un producto
-parecido. Al cargar el catálogo, **incluye siempre medida y cantidad**: sin
-ellas aplicaría el precio del 24×36" a cualquier tamaño.
+**Precios**: el prompt distingue **tres** categorías, no dos.
 
-Los precios viven en la base de conocimiento, no en el prompt, para poder
-actualizarlos sin tocar la configuración del agente.
+1. **Catálogo** — precio fijo publicado (tarjetas, roll-ups, coroplast,
+   A-frames). Se cotiza **desde la base de conocimiento**. Al cargarlo,
+   **incluye siempre medida y cantidad**: sin ellas aplicaría el precio del
+   24×36" a cualquier tamaño.
+2. **Tarifa calculada** — precio por unidad de medida que el agente aplica
+   él mismo. Hoy: **banner de vinilo impreso a $8.00/pie²**, dobladillo y
+   ojales incluidos, redondeando **hacia arriba** al pie² entero.
+3. **A medida** — channel letters, wraps, instalación. Nunca cotiza.
+
+Las **tarifas van en el prompt**, no en la base de conocimiento, y esto no
+es un capricho: la cuenta no tiene clave de embeddings, así que la búsqueda
+es **solo léxica**. Un catálogo se encuentra por el nombre del producto,
+pero una fórmula tiene que estar presente siempre — si el cliente escribe
+"lona" en vez de "banner", la búsqueda no la recupera y el agente traspasa.
+El catálogo de precios cerrados sí va en la base de conocimiento, para
+poder actualizarlo sin tocar la configuración.
+
+Un modelo pequeño falla más en convertir pulgadas a pies que en multiplicar,
+así que el prompt lleva el procedimiento paso a paso **y ejemplos resueltos
+con números**. Verificado en vivo: 24×36" → $48.00, 4×8 ft → $256.00,
+20×30" → $40.00 (4.17 pie² redondeado a 5).
+
+Al añadir o cambiar una tarifa, ejecuta la comprobación en vivo — llama a
+OpenAI de verdad y comprueba que sale el número correcto:
+
+```
+npx vitest run --config vitest.live.config.ts --disable-console-intercept
+```
+
+Los casos están en `src/lib/ai/__live-pricing.test.ts`. Añade siempre uno
+que **deba** cotizarse y uno que **no**: un agente que cotiza de más sale
+tan caro como uno que traspasa todo.
 
 Límites reales del agente, para no esperar de más:
 
@@ -108,15 +132,34 @@ Límites reales del agente, para no esperar de más:
   "WHAT YOU DON'T KNOW" del prompt.
 - Reiniciar el contador de un hilo: `UPDATE conversations SET
   ai_reply_count = 0 WHERE id = ...`
+- **"Reanudar IA" borra la prueba del traspaso.** El botón devuelve el hilo
+  al bot, y para eso limpia las cuatro señales de golpe: quita la pausa,
+  borra el resumen, **suelta la asignación** y pone el contador a cero
+  (`src/app/api/ai/autoreply/[conversationId]/route.ts:69-84`). Si lo pulsas
+  antes de mirar, la conversación queda como si nunca hubiera pasado nada.
+  Las filas de `notifications` y `ai_usage_log` sí sobreviven: son el sitio
+  donde comprobar qué ocurrió de verdad.
+- **La notificación del traspaso es solo dentro de la app** — la campanita
+  del CRM. No sale al teléfono ni al correo. Ver Pendiente.
 
 Pendiente:
 
 - **El número de prueba caduca a los 90 días** y solo habla con destinatarios
   registrados. Para clientes reales hace falta registrar un número propio.
+  Destinatarios dados de alta (máx. 5): `+1 347 557 6460`, `+1 347 278 2478`.
+  Se añaden en Configuración de la API → Para → «Administrar lista de números
+  de teléfono». Meta manda un código de 5 dígitos por WhatsApp que **solo se
+  ve en el teléfono principal**, nunca en WhatsApp Desktop ni en la web.
 - **Dos commits sin desplegar**, a la espera de la clave SSH en GitHub:
   `c81901a` (7 vulnerabilidades) y `8a539eb` (adjuntos en el contexto de IA).
   Hasta desplegarlos, el bot en producción sigue repitiendo su pregunta
   cuando el cliente responde con una foto.
+- **Aviso del traspaso fuera de la app** — hoy solo se crea una fila en
+  `notifications` (campanita). Falta que llegue al teléfono del dueño por
+  WhatsApp, o al correo.
+- **Cargo mínimo por banner sin definir.** El prompt lleva una regla
+  provisional: no cotizar nada por debajo de 6 pie², traspasarlo. Sustituir
+  por la cifra real en cuanto se decida.
 - **Mensajes duplicados en `messages`** — se observaron filas repetidas con
   la misma marca de tiempo. Sin diagnosticar; conviene mirarlo antes de
   atender clientes reales.
