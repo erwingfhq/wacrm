@@ -73,9 +73,6 @@ export async function POST(request: Request) {
         autoReplyMaxPerConversation: 3,
         handoffAgentId: null,
         embeddingsApiKey: null,
-        handoffNotifyPhone: null,
-        handoffNotifyTemplate: null,
-        handoffNotifyTemplateLang: 'es',
       })
     } catch (err) {
       if (err instanceof AiError) {

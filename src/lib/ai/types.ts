@@ -29,15 +29,6 @@ export interface AiConfig {
    *  knowledge base is embedded and semantic retrieval turns on; when
    *  null, retrieval falls back to lexical full-text search. */
   embeddingsApiKey: string | null
-  /** Phone (international, no `+`) that gets a WhatsApp ping when the
-   *  bot hands a thread off. Null = in-app bell only, which nobody sees
-   *  unless the CRM is open. */
-  handoffNotifyPhone: string | null
-  /** Approved Meta template used for that ping when the 24h window is
-   *  shut. Null = free-form only, which silently fails after a day of
-   *  no contact. Two variables: {{1}} contact name, {{2}} question. */
-  handoffNotifyTemplate: string | null
-  handoffNotifyTemplateLang: string
 }
 
 /** A single conversation turn in the shape both providers accept. */

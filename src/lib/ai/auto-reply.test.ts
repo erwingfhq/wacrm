@@ -8,10 +8,8 @@ const h = vi.hoisted(() => ({
   retrieveKnowledge: vi.fn(),
   generateReply: vi.fn(),
   engineSendText: vi.fn(),
-  notifyHandoff: vi.fn(),
   state: {
     conv: null as Record<string, unknown> | null,
-    contact: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
@@ -24,7 +22,6 @@ vi.mock('./context', () => ({ buildConversationContext: h.buildConversationConte
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./generate', () => ({ generateReply: h.generateReply }))
 vi.mock('@/lib/flows/meta-send', () => ({ engineSendText: h.engineSendText }))
-vi.mock('./notify-handoff', () => ({ notifyHandoff: h.notifyHandoff }))
 vi.mock('./admin-client', () => ({
   supabaseAdmin: () => ({
     from: (table: string) => {
@@ -36,15 +33,6 @@ vi.mock('./admin-client', () => ({
           in: () => chain,
           limit: () =>
             Promise.resolve({ data: h.state.autoResponders, error: null }),
-        }
-        return chain
-      }
-      if (table === 'contacts') {
-        const chain = {
-          select: () => chain,
-          eq: () => chain,
-          maybeSingle: () =>
-            Promise.resolve({ data: h.state.contact, error: null }),
         }
         return chain
       }
@@ -89,9 +77,6 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
     autoReplyMaxPerConversation: 3,
     handoffAgentId: null,
     embeddingsApiKey: null,
-    handoffNotifyPhone: null,
-    handoffNotifyTemplate: null,
-    handoffNotifyTemplateLang: 'es',
     ...overrides,
   }
 }
@@ -102,7 +87,6 @@ beforeEach(() => {
     ai_autoreply_disabled: false,
     ai_reply_count: 0,
   }
-  h.state.contact = { name: 'Ana', phone: '13475550000' }
   h.state.autoResponders = []
   h.state.claim = true
   h.state.updatePayload = null
@@ -112,7 +96,6 @@ beforeEach(() => {
   h.retrieveKnowledge.mockResolvedValue([])
   h.generateReply.mockResolvedValue({ text: 'Hello!', handoff: false })
   h.engineSendText.mockResolvedValue({ whatsapp_message_id: 'm1' })
-  h.notifyHandoff.mockResolvedValue({ sent: true, via: 'text' })
 })
 
 describe('dispatchInboundToAiReply — eligibility gates', () => {
@@ -225,64 +208,5 @@ describe('dispatchInboundToAiReply — handoff', () => {
       ai_autoreply_disabled: true,
       assigned_agent_id: 'agent-7',
     })
-  })
-
-  // The in-app bell is invisible unless someone has the CRM open, so a
-  // handoff with a notify phone configured must also reach that phone.
-  it('pings the notify phone on handoff, with the customer question', async () => {
-    h.loadAiConfig.mockResolvedValue(
-      aiConfig({
-        handoffNotifyPhone: '13475576460',
-        handoffNotifyTemplate: 'handoff_alert',
-      }),
-    )
-    h.buildConversationContext.mockResolvedValue([
-      { role: 'user', content: 'cuanto cuesta un banner 24x36' },
-    ])
-    h.generateReply.mockResolvedValue({ text: '', handoff: true })
-
-    await dispatchInboundToAiReply(ARGS)
-
-    expect(h.notifyHandoff).toHaveBeenCalledTimes(1)
-    expect(h.notifyHandoff.mock.calls[0][1]).toMatchObject({
-      accountId: 'acct-1',
-      notifyPhone: '13475576460',
-      contactName: 'Ana',
-      question: 'cuanto cuesta un banner 24x36',
-      templateName: 'handoff_alert',
-    })
-  })
-
-  it('falls back to the phone number when the contact has no name', async () => {
-    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffNotifyPhone: '1347' }))
-    h.state.contact = { name: null, phone: '13475550000' }
-    h.generateReply.mockResolvedValue({ text: '', handoff: true })
-    await dispatchInboundToAiReply(ARGS)
-    expect(h.notifyHandoff.mock.calls[0][1]).toMatchObject({
-      contactName: '13475550000',
-    })
-  })
-
-  it('does not ping anyone when no notify phone is configured', async () => {
-    h.generateReply.mockResolvedValue({ text: '', handoff: true })
-    await dispatchInboundToAiReply(ARGS)
-    expect(h.notifyHandoff).not.toHaveBeenCalled()
-  })
-
-  // The notifier owns its errors, but if that ever regressed a throw
-  // here would propagate into the webhook's after() block.
-  it('survives a notifier that throws', async () => {
-    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffNotifyPhone: '1347' }))
-    h.generateReply.mockResolvedValue({ text: '', handoff: true })
-    h.notifyHandoff.mockRejectedValue(new Error('Meta down'))
-    await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
-  })
-
-  it('does not ping on a normal reply', async () => {
-    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffNotifyPhone: '1347' }))
-    await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendText).toHaveBeenCalled()
-    expect(h.notifyHandoff).not.toHaveBeenCalled()
   })
 })
