@@ -200,6 +200,43 @@ describe('dispatchInboundToAiReply — handoff', () => {
     expect(h.state.updatePayload).not.toHaveProperty('assigned_agent_id')
   })
 
+  // A silent handoff reads as being ignored: the customer waits, repeats
+  // the question, and gets nothing. The model writes a short line in
+  // their language next to the sentinel; it must actually be sent.
+  it('sends the handoff notice to the customer', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Déjame confirmarlo con un compañero y te digo enseguida.',
+      handoff: true,
+    })
+    await dispatchInboundToAiReply(ARGS)
+
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect(h.engineSendText.mock.calls[0][0]).toMatchObject({
+      conversationId: 'conv-1',
+      text: 'Déjame confirmarlo con un compañero y te digo enseguida.',
+      aiGenerated: true,
+    })
+    // Still a handoff: paused, and no reply slot consumed.
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.rpcCalls).toHaveLength(0)
+  })
+
+  it('stays silent on handoff when the model wrote nothing', async () => {
+    h.generateReply.mockResolvedValue({ text: '', handoff: true })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
+  // The pause is what stops the next inbound producing a second identical
+  // apology, so it must be durable even if the send fails.
+  it('keeps the handoff state when the notice fails to send', async () => {
+    h.generateReply.mockResolvedValue({ text: 'Ahora te confirmo.', handoff: true })
+    h.engineSendText.mockRejectedValue(new Error('Meta 400'))
+    await expect(dispatchInboundToAiReply(ARGS)).resolves.toBeUndefined()
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
   it('routes to the configured handoff agent on handoff', async () => {
     h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
     h.generateReply.mockResolvedValue({ text: '', handoff: true })

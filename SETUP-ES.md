@@ -86,65 +86,54 @@ que el bot escribe.
 Palancas de ahorro si crece el volumen: recortar el system prompt o bajar
 `AI_CONTEXT_MESSAGE_LIMIT` de 20 a 8–10.
 
-**Precios**: el prompt distingue **tres** categorías, no dos.
+**Precios**: el agente **no calcula ni busca** el precio de un banner. Lo
+recibe ya resuelto.
 
-1. **Catálogo** — precio fijo publicado (tarjetas, roll-ups, coroplast,
-   A-frames). Se cotiza **desde la base de conocimiento**. Al cargarlo,
-   **incluye siempre medida y cantidad**: sin ellas aplicaría el precio del
-   24×36" a cualquier tamaño.
-2. **Tabla de precios de banner** — matriz de medida → importe, generada
-   en código a $8.00/pie² con dobladillo y ojales incluidos, redondeando
-   hacia arriba al pie² entero. El agente **lee**, no calcula.
-3. **A medida** — channel letters, wraps, instalación. Nunca cotiza.
+`src/lib/pricing/banner.ts` detecta la medida en el mensaje del cliente,
+calcula el importe ($8.00/pie², redondeando hacia arriba al pie entero,
+dobladillo y ojales incluidos) e inyecta una línea en el contexto que
+empieza por `BANNER PRICE, already calculated for you`. El agente solo la
+transmite. Si esa línea no está, no sabe el precio y traspasa.
 
-**El agente no hace aritmética, y esto no es un detalle de estilo.** Se
-probó con la fórmula en el prompt y ejemplos resueltos, y falla de forma
-intermitente: la misma pregunta (banner de 20x30") dio $40.00 en una
-ejecución y $88.00 en la siguiente, porque confundió los pies cuadrados
-con uno de los lados. En producción cotizó un 48x72" a $256.00 en vez de
-$192.00, copiando el importe de un ejemplo del propio prompt. Un precio
-inventado va directo a un cliente, así que la aritmética se hace **una
-vez, en código**, al generar la tabla.
+**Por qué no se le deja calcular ni consultar una tabla.** Se midió con
+cuatro formatos distintos y todos produjeron algún importe equivocado:
 
-Consecuencias que hay que aceptar:
+| Formato en el prompt | Fallo observado |
+|---|---|
+| Fórmula + ejemplos resueltos | $256.00 por un 48x72" (son $192.00) |
+| 22 medidas agrupadas | $288.00 por un 3x6 ft (son $144.00) |
+| Matriz simétrica 9×9 + 10×10 | $320.00 por un 60x120" (son $400.00) |
+| 160 líneas, una por medida | $640.00 por un 60x120" |
 
-- **Una medida que no esté en la tabla se traspasa.** Es deliberado: mejor
-  esperar unos minutos que cotizar mal. Para reducir traspasos, amplía la
-  tabla — no le devuelvas la calculadora.
-- La tabla es **simétrica**: cada par aparece en los dos órdenes. Se
-  intentó pedirle "pon el número menor primero" y traspasaba el 72x48" en
-  3 de 3 pasadas. Un paso de razonamiento que se puede eliminar del prompt
-  es un paso que ya no puede fallar.
-- **Sin frases de ejemplo en el prompt.** Una plantilla en inglés (`"That
-  is X square feet, so it is $Y"`) hacía que respondiera en inglés a
-  clientes que escribían en español. Copiaba la frase entera, idioma
-  incluido.
+Y prohibirle calcular tampoco sirve: lo hace igual. Cuanto más larga la
+lista, más salta de línea. No es un prompt mejorable — es el límite del
+modelo haciendo aritmética y búsqueda. Desde que el número se calcula en
+código, **cero errores de precio** en las pasadas de verificación.
 
-Para regenerar o ampliar la tabla:
-`scripts/` no la contiene — se generó con el script de mantenimiento del
-prompt; los rangos son `IN = [24,30,36,48,60,72,84,96,120]` pulgadas y
-`FT = [2,3,4,5,6,8,10,12,15,20]` pies.
+El parser vive en el mismo módulo y tiene sus propias pruebas
+(`banner.test.ts`, deterministas y gratuitas). Decisiones que conviene
+conocer:
 
-Al añadir o cambiar una tarifa, ejecuta la comprobación en vivo — llama a
-OpenAI de verdad y comprueba que sale el número correcto:
+- **`4x8` a secas se traspasa.** 4x8 pies son $256.00 y 4x8 pulgadas no
+  llegan al mínimo; no hay valor por defecto seguro entre esos dos. Con
+  unidad explícita (`4x8 ft`) cotiza sin problema.
+- **Un número > 12 sin unidad se toma como pulgadas.** Nadie encarga un
+  banner de 20 pies de lado por WhatsApp sin decirlo.
+- **Límites de plausibilidad** (de 6" a 360" por lado): sin ellos,
+  `llamame al 347 por 5 minutos` se leía como una medida.
+- **Dos medidas en un mensaje → traspaso.** Cotizar la que coincidió
+  primero es peor que preguntar.
 
-```
-npx vitest run --config vitest.live.config.ts --disable-console-intercept
-```
+Para cambiar la tarifa o el mínimo: `BANNER_RATE_PER_SQFT` y
+`BANNER_MIN_SQFT` en `src/lib/pricing/banner.ts`.
 
-Los casos están en `src/lib/ai/__live-pricing.test.ts`. Añade siempre uno
-que **deba** cotizarse y uno que **no**: un agente que cotiza de más sale
-tan caro como uno que traspasa todo.
-
-**Ejecuta la comprobación tres veces, no una.** Los fallos de este agente
-son intermitentes: la primera versión de la tabla pasó una ejecución
-entera y falló la siguiente con el mismo prompt. Una sola pasada verde no
-prueba nada.
-
-**Y prueba en multiturno.** El fallo de producción ocurrió en el tercer
-turno: con un precio anterior ya en el contexto, el modelo lo reutilizó.
-Un caso de un solo turno no lo habría detectado nunca. El campo `contexto`
-de cada caso sirve para eso.
+**El prompt se edita en `scripts/set-agent-prompt.mjs`, nunca por parches
+sobre la base de datos.** Se hizo así al principio con expresiones
+regulares y una no codiciosa paró en el primer `hand off.`, dejando
+incrustada una tabla de 160 medidas de una versión anterior: el prompt
+acabó con 482 líneas y dos políticas de precios contradictorias, a 5.500
+tokens por mensaje. El script vuelca el prompt entero y verifica lo
+guardado; ahora son 87 líneas y ~1.300 tokens.
 
 Límites reales del agente, para no esperar de más:
 
@@ -166,6 +155,15 @@ Límites reales del agente, para no esperar de más:
   donde comprobar qué ocurrió de verdad.
 - **La notificación del traspaso es solo dentro de la app** — la campanita
   del CRM. No sale al teléfono ni al correo. Ver Pendiente.
+- **El traspaso ya no es silencioso.** Antes el bot se callaba de golpe y
+  desde fuera era indistinguible de ignorar al cliente: preguntabas el
+  plazo de entrega, decidía traspasar y no salía nada. Ahora escribe una
+  línea («Lo voy a consultar y un colega te confirmará por aquí») antes
+  de pausarse. El centinela `[[HANDOFF]]` viaja junto a ese texto y
+  `parseGeneration` lo separa.
+- **Residuo conocido:** esa línea de despedida sale en inglés
+  aproximadamente 1 de cada 3 veces aunque el cliente escriba en español.
+  No afecta a precios. Sin resolver.
 
 Pendiente:
 

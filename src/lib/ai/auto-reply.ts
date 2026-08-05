@@ -9,6 +9,7 @@ import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
+import { bannerPriceFact } from '@/lib/pricing/banner'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -99,12 +100,18 @@ export async function dispatchInboundToAiReply(
     }
 
     // Ground the reply in the account's knowledge base (best-effort).
-    const knowledge = await retrieveKnowledge(
-      db,
-      accountId,
-      config,
-      latestUserMessage(messages),
-    )
+    const question = latestUserMessage(messages)
+    const knowledge = await retrieveKnowledge(db, accountId, config, question)
+
+    // Banner prices are worked out here, in code, and handed to the model
+    // as a settled fact. It was measured quoting them itself under four
+    // different prompt formats and got them wrong in all four ($256 for a
+    // 48x72" that costs $192, $640 for a 60x120" that costs $400).
+    // Forbidding it to calculate did not work either — it calculated
+    // anyway. So it no longer decides the number, it only relays it.
+    // First in the list: closest to the question, hardest to overlook.
+    const priceFact = bannerPriceFact(question)
+    if (priceFact) knowledge.unshift(priceFact)
 
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
@@ -137,8 +144,9 @@ export async function dispatchInboundToAiReply(
       // this thread and hand it to a human. We (a) pause the bot here
       // (sticky until re-enabled), (b) route the conversation to the
       // configured handoff agent — null leaves it in the shared queue —
-      // and (c) leave a short internal note so whoever picks it up has
-      // context. Assigning fires the `on_conversation_assigned` trigger,
+      // (c) leave a short internal note so whoever picks it up has
+      // context, and (d) tell the CUSTOMER someone will get back to
+      // them. Assigning fires the `on_conversation_assigned` trigger,
       // which notifies the agent.
       const summary = buildHandoffSummary({
         messages,
@@ -153,7 +161,39 @@ export async function dispatchInboundToAiReply(
       if (config.handoffAgentId && !conv.assigned_agent_id) {
         update.assigned_agent_id = config.handoffAgentId
       }
-      await db.from('conversations').update(update).eq('id', conversationId)
+      const { error: handoffErr } = await db
+        .from('conversations')
+        .update(update)
+        .eq('id', conversationId)
+      // A failed handoff write is invisible otherwise: the bot goes
+      // quiet, nothing is assigned, and the thread looks untouched.
+      if (handoffErr) {
+        console.error('[ai auto-reply] handoff update failed:', handoffErr)
+      }
+
+      // Say something before going quiet. A silent handoff is
+      // indistinguishable from being ignored: the customer waits, repeats
+      // the question, and gets nothing back. The model is asked to write
+      // this line in the customer's language alongside the sentinel;
+      // `parseGeneration` keeps it. No reply slot is claimed — the thread
+      // is being handed off, and this isn't an answer.
+      //
+      // Sent AFTER the state write on purpose: the pause is what stops a
+      // second inbound producing a second identical apology.
+      if (text) {
+        try {
+          await engineSendText({
+            accountId,
+            userId: configOwnerUserId,
+            conversationId,
+            contactId,
+            text,
+            aiGenerated: true,
+          })
+        } catch (err) {
+          console.error('[ai auto-reply] handoff notice to customer failed:', err)
+        }
+      }
       return
     }
 
