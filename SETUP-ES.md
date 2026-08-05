@@ -92,23 +92,38 @@ Palancas de ahorro si crece el volumen: recortar el system prompt o bajar
    A-frames). Se cotiza **desde la base de conocimiento**. Al cargarlo,
    **incluye siempre medida y cantidad**: sin ellas aplicaría el precio del
    24×36" a cualquier tamaño.
-2. **Tarifa calculada** — precio por unidad de medida que el agente aplica
-   él mismo. Hoy: **banner de vinilo impreso a $8.00/pie²**, dobladillo y
-   ojales incluidos, redondeando **hacia arriba** al pie² entero.
+2. **Tabla de precios de banner** — matriz de medida → importe, generada
+   en código a $8.00/pie² con dobladillo y ojales incluidos, redondeando
+   hacia arriba al pie² entero. El agente **lee**, no calcula.
 3. **A medida** — channel letters, wraps, instalación. Nunca cotiza.
 
-Las **tarifas van en el prompt**, no en la base de conocimiento, y esto no
-es un capricho: la cuenta no tiene clave de embeddings, así que la búsqueda
-es **solo léxica**. Un catálogo se encuentra por el nombre del producto,
-pero una fórmula tiene que estar presente siempre — si el cliente escribe
-"lona" en vez de "banner", la búsqueda no la recupera y el agente traspasa.
-El catálogo de precios cerrados sí va en la base de conocimiento, para
-poder actualizarlo sin tocar la configuración.
+**El agente no hace aritmética, y esto no es un detalle de estilo.** Se
+probó con la fórmula en el prompt y ejemplos resueltos, y falla de forma
+intermitente: la misma pregunta (banner de 20x30") dio $40.00 en una
+ejecución y $88.00 en la siguiente, porque confundió los pies cuadrados
+con uno de los lados. En producción cotizó un 48x72" a $256.00 en vez de
+$192.00, copiando el importe de un ejemplo del propio prompt. Un precio
+inventado va directo a un cliente, así que la aritmética se hace **una
+vez, en código**, al generar la tabla.
 
-Un modelo pequeño falla más en convertir pulgadas a pies que en multiplicar,
-así que el prompt lleva el procedimiento paso a paso **y ejemplos resueltos
-con números**. Verificado en vivo: 24×36" → $48.00, 4×8 ft → $256.00,
-20×30" → $40.00 (4.17 pie² redondeado a 5).
+Consecuencias que hay que aceptar:
+
+- **Una medida que no esté en la tabla se traspasa.** Es deliberado: mejor
+  esperar unos minutos que cotizar mal. Para reducir traspasos, amplía la
+  tabla — no le devuelvas la calculadora.
+- La tabla es **simétrica**: cada par aparece en los dos órdenes. Se
+  intentó pedirle "pon el número menor primero" y traspasaba el 72x48" en
+  3 de 3 pasadas. Un paso de razonamiento que se puede eliminar del prompt
+  es un paso que ya no puede fallar.
+- **Sin frases de ejemplo en el prompt.** Una plantilla en inglés (`"That
+  is X square feet, so it is $Y"`) hacía que respondiera en inglés a
+  clientes que escribían en español. Copiaba la frase entera, idioma
+  incluido.
+
+Para regenerar o ampliar la tabla:
+`scripts/` no la contiene — se generó con el script de mantenimiento del
+prompt; los rangos son `IN = [24,30,36,48,60,72,84,96,120]` pulgadas y
+`FT = [2,3,4,5,6,8,10,12,15,20]` pies.
 
 Al añadir o cambiar una tarifa, ejecuta la comprobación en vivo — llama a
 OpenAI de verdad y comprueba que sale el número correcto:
@@ -120,6 +135,16 @@ npx vitest run --config vitest.live.config.ts --disable-console-intercept
 Los casos están en `src/lib/ai/__live-pricing.test.ts`. Añade siempre uno
 que **deba** cotizarse y uno que **no**: un agente que cotiza de más sale
 tan caro como uno que traspasa todo.
+
+**Ejecuta la comprobación tres veces, no una.** Los fallos de este agente
+son intermitentes: la primera versión de la tabla pasó una ejecución
+entera y falló la siguiente con el mismo prompt. Una sola pasada verde no
+prueba nada.
+
+**Y prueba en multiturno.** El fallo de producción ocurrió en el tercer
+turno: con un precio anterior ya en el contexto, el modelo lo reutilizó.
+Un caso de un solo turno no lo habría detectado nunca. El campo `contexto`
+de cada caso sirve para eso.
 
 Límites reales del agente, para no esperar de más:
 
