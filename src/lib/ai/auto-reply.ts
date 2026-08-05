@@ -5,6 +5,7 @@ import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
 import { buildSystemPrompt } from './defaults'
 import { buildHandoffSummary } from './handoff'
+import { notifyHandoff } from './notify-handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
@@ -153,7 +154,35 @@ export async function dispatchInboundToAiReply(
       if (config.handoffAgentId && !conv.assigned_agent_id) {
         update.assigned_agent_id = config.handoffAgentId
       }
-      await db.from('conversations').update(update).eq('id', conversationId)
+      const { error: handoffErr } = await db
+        .from('conversations')
+        .update(update)
+        .eq('id', conversationId)
+      // A failed handoff write is invisible otherwise: the bot goes
+      // quiet, nothing is assigned, and the thread looks untouched.
+      if (handoffErr) {
+        console.error('[ai auto-reply] handoff update failed:', handoffErr)
+      }
+
+      // The in-app bell only reaches someone with the CRM open. Ping the
+      // responsible phone too, when one is configured. Awaited (not
+      // fire-and-forget) so its failures are logged before the webhook's
+      // `after()` block is torn down; it never throws.
+      if (config.handoffNotifyPhone) {
+        const { data: contact } = await db
+          .from('contacts')
+          .select('name, phone')
+          .eq('id', contactId)
+          .maybeSingle()
+        await notifyHandoff(db, {
+          accountId,
+          notifyPhone: config.handoffNotifyPhone,
+          contactName: contact?.name || contact?.phone || 'Un cliente',
+          question: latestUserMessage(messages),
+          templateName: config.handoffNotifyTemplate,
+          templateLang: config.handoffNotifyTemplateLang,
+        })
+      }
       return
     }
 

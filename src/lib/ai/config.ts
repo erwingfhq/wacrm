@@ -12,10 +12,13 @@ interface AiConfigRow {
   auto_reply_max_per_conversation: number
   handoff_agent_id: string | null
   embeddings_api_key: string | null
+  handoff_notify_phone: string | null
+  handoff_notify_template: string | null
+  handoff_notify_template_lang: string | null
 }
 
 const CONFIG_COLUMNS =
-  'provider, model, api_key, system_prompt, is_active, auto_reply_enabled, auto_reply_max_per_conversation, handoff_agent_id, embeddings_api_key'
+  'provider, model, api_key, system_prompt, is_active, auto_reply_enabled, auto_reply_max_per_conversation, handoff_agent_id, embeddings_api_key, handoff_notify_phone, handoff_notify_template, handoff_notify_template_lang'
 
 /**
  * Load and decrypt the account's AI config for *use* (draft or
@@ -79,6 +82,11 @@ export async function loadAiConfig(
     autoReplyMaxPerConversation: row.auto_reply_max_per_conversation,
     handoffAgentId: row.handoff_agent_id,
     embeddingsApiKey,
+    handoffNotifyPhone: row.handoff_notify_phone,
+    handoffNotifyTemplate: row.handoff_notify_template,
+    // The column is NOT NULL DEFAULT 'es', but a row written before
+    // migration 037 reads back as null through PostgREST's cache.
+    handoffNotifyTemplateLang: row.handoff_notify_template_lang ?? 'es',
   }
 }
 
