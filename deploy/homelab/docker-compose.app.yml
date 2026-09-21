@@ -1,0 +1,57 @@
+# El CRM en el homelab, conectado al Supabase autoalojado.
+#
+# Se levanta APARTE del compose de Supabase, uniéndose a su red, para que
+# actualizar uno no obligue a tocar el otro. La app habla con Kong por
+# el nombre de servicio `kong` dentro de esa red cuando corre en el
+# servidor; el navegador del equipo llega a Kong por Tailscale (:8443).
+#
+#   docker compose -f docker-compose.app.yml --env-file app.env up -d --build
+#
+# NEXT_PUBLIC_* se hornean en la imagen al construir: si cambian, hay
+# que reconstruir (--build). Los secretos de servidor van por env_file y
+# nunca entran en la imagen.
+name: wacrm
+
+services:
+  app:
+    build:
+      context: ../..
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
+        NEXT_PUBLIC_APP_LOCALE: ${NEXT_PUBLIC_APP_LOCALE:-en}
+    env_file:
+      - app.env
+    environment:
+      PORT: 3000
+    ports:
+      # Solo en localhost del host: Tailscale es quien lo publica.
+      - '127.0.0.1:${HOST_PORT:-3000}:3000'
+    restart: unless-stopped
+    # El servidor Next.js también llama a Supabase por la URL pública
+    # (NEXT_PUBLIC_SUPABASE_URL). Fijar el nombre a la IP de Tailscale
+    # del host evita depender de que el DNS del contenedor resuelva
+    # *.ts.net, y mantiene válido el certificado (el nombre no cambia).
+    extra_hosts:
+      - '${TAILNET_HOST}:${TAILSCALE_IP}'
+    networks:
+      - supabase
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://localhost:3000').then((r)=>process.exit(r.ok||r.status<500?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  supabase:
+    # La red que crea el compose oficial de Supabase (proyecto "supabase").
+    external: true
+    name: supabase_default

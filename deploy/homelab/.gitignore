@@ -1,0 +1,3 @@
+supabase.env
+app.env
+dump/

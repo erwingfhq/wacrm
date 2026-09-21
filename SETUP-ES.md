@@ -187,7 +187,34 @@ Pendiente:
   la misma marca de tiempo. Sin diagnosticar; conviene mirarlo antes de
   atender clientes reales.
 
-## Producción (hecho)
+## Homelab (en curso)
+
+Producción se traslada al homelab del dueño: CRM + Supabase autoalojado en
+Docker, publicados con **Tailscale** — Funnel para que Meta llegue al
+webhook, tailnet privada para el equipo. Sin mover DNS, sin abrir puertos.
+
+Todo está en `deploy/homelab/`, con guía paso a paso en `README-ES.md`.
+Decisiones que conviene no perder:
+
+- **La app es pública (Funnel :443) y Supabase no (:8443, solo tailnet).**
+  Funnel expone puertos enteros, no rutas, y Meta necesita el webhook.
+  Pero iniciar sesión exige Supabase, así que un desconocido ve el login y
+  no pasa de ahí. Es más cerrado que Hostinger, donde todo era público.
+- **`ENCRYPTION_KEY` se conserva; `JWT_SECRET` y las claves anon/service
+  son nuevas.** Lo primero porque cifra el token de WhatsApp, el
+  `verify_token` y la clave de OpenAI en la base de datos. Lo segundo
+  porque son JWT firmados por instancia — las de la nube no valen.
+- **Solo se vuelcan DATOS, no esquema.** El esquema `public` lo ponen las
+  36 migraciones; `auth` y `storage` los crean los servicios. Volcar el
+  esquema de la nube arrastra roles y versiones que no existen igual.
+- **`ngsignscrm.com` deja de servir la app.** Sigue para el correo. El CRM
+  vive en `https://<nodo>.<tailnet>.ts.net`; ningún cliente lo ve nunca.
+- Motivo del traslado: Supabase Free pausó el proyecto tras 7 días sin
+  tráfico (retira el DNS; la app carga el login y nada más). Estuvo
+  pausado del ~13 de agosto al 16 de septiembre de 2026 y **los mensajes de
+  WhatsApp de ese periodo se perdieron**.
+
+## Producción en Hostinger (hasta el traslado)
 
 | | |
 |---|---|
