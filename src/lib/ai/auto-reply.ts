@@ -10,6 +10,7 @@ import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { bannerPriceFact } from '@/lib/pricing/banner'
+import { customerNameFact } from './customer'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -112,6 +113,18 @@ export async function dispatchInboundToAiReply(
     // First in the list: closest to the question, hardest to overlook.
     const priceFact = bannerPriceFact(question)
     if (priceFact) knowledge.unshift(priceFact)
+
+    // Who is writing. Meta sends the sender's WhatsApp profile name with
+    // every inbound and the webhook stores it on the contact; without
+    // this the model greeted everyone identically. Goes AFTER the price
+    // so the amount stays closest to the question.
+    const { data: contact } = await db
+      .from('contacts')
+      .select('name')
+      .eq('id', contactId)
+      .maybeSingle()
+    const nameFact = customerNameFact(contact?.name)
+    if (nameFact) knowledge.push(nameFact)
 
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,

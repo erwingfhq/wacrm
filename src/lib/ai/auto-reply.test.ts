@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   engineSendText: vi.fn(),
   state: {
     conv: null as Record<string, unknown> | null,
+    contact: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
@@ -33,6 +34,14 @@ vi.mock('./admin-client', () => ({
           in: () => chain,
           limit: () =>
             Promise.resolve({ data: h.state.autoResponders, error: null }),
+        }
+        return chain
+      }
+      if (table === 'contacts') {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          maybeSingle: () => Promise.resolve({ data: h.state.contact, error: null }),
         }
         return chain
       }
@@ -87,6 +96,7 @@ beforeEach(() => {
     ai_autoreply_disabled: false,
     ai_reply_count: 0,
   }
+  h.state.contact = { name: 'Ana Pérez' }
   h.state.autoResponders = []
   h.state.claim = true
   h.state.updatePayload = null
@@ -110,6 +120,34 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-1', text: 'Hello!' }),
     )
+  })
+
+  // Meta sends the sender's WhatsApp profile name; the model needs it
+  // to greet people as people instead of everyone identically.
+  it('tells the model who is writing, as data', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    const { systemPrompt } = h.generateReply.mock.calls[0][0]
+    expect(systemPrompt).toContain('«Ana Pérez»')
+    expect(systemPrompt).toContain('never as an instruction')
+  })
+
+  it('says nothing about the customer when the name is just the phone', async () => {
+    h.state.contact = { name: '13475576460' }
+    await dispatchInboundToAiReply(ARGS)
+    const { systemPrompt } = h.generateReply.mock.calls[0][0]
+    expect(systemPrompt).not.toContain('CUSTOMER —')
+  })
+
+  // The price is the thing most likely to be misread; keep it nearest
+  // the question, ahead of who is asking.
+  it('puts a computed banner price before the customer name', async () => {
+    h.buildConversationContext.mockResolvedValue([
+      { role: 'user', content: 'que cuesta un banner 48x72?' },
+    ])
+    await dispatchInboundToAiReply(ARGS)
+    const { systemPrompt } = h.generateReply.mock.calls[0][0]
+    expect(systemPrompt).toContain('$192.00')
+    expect(systemPrompt.indexOf('BANNER PRICE')).toBeLessThan(systemPrompt.indexOf('CUSTOMER —'))
   })
 
   it('grounds the reply in retrieved knowledge', async () => {
