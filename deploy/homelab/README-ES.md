@@ -172,14 +172,62 @@ reversible en un minuto mientras no apagues nada.
 
 ## 9. Copias de seguridad — no es opcional
 
-```bash
-sudo mkdir -p /srv/backups/wacrm     # idealmente en OTRO disco
-crontab -e
-30 3 * * * BACKUP_DIR=/srv/backups/wacrm ~/srv/wacrm/deploy/homelab/backup.sh >> ~/wacrm-backup.log 2>&1
+Ya instalado y en marcha en `docker-srv`:
+
+```
+30 3 * * * /opt/containers/wacrm/deploy/homelab/backup.sh >> /var/log/wacrm-backup.log 2>&1
 ```
 
-Y una vez al mes, **restaura una copia en un contenedor aparte** para
-comprobar que sirve. Una copia que nunca se ha restaurado es una hipótesis.
+Guarda en `/var/backups/wacrm/` la base de datos y los ficheros de
+Storage, con 14 días de retención. Una copia ronda los **96 KB**, así que
+la retención no cuesta nada.
+
+**Cada copia se verifica antes de darse por buena**: que el gzip esté
+íntegro, que contenga las tablas clave, y cuántos mensajes trae. Una
+copia vacía o truncada pasa desapercibida durante meses y se descubre el
+día que hace falta; por eso el script falla en voz alta en lugar de
+dejarla ahí.
+
+Dos trampas que costaron un rato al montarlo, por si tocas el script:
+
+- **Nada de umbrales por tamaño.** La primera versión exigía 100 KB
+  mínimos y saltaba con copias perfectamente válidas: esta base entera
+  comprime a 96 KB. Se comprueba el contenido, no los bytes.
+- **Cuidado con `set -o pipefail` y los cortes anticipados.** `grep -q` y
+  `awk ... {exit}` cierran la tubería, `zcat` recibe SIGPIPE y el script
+  muere con código 141 *después* de haber hecho bien la copia. Se lee el
+  fichero entero de una pasada.
+
+### Pendiente: sacarlas de la máquina
+
+Hoy las copias viven en el **mismo disco** que los datos. Eso protege de
+un borrado accidental o una migración fallida, pero no de un disco
+muerto. El script ya admite un destino remoto por la variable `OFFSITE`,
+que hace `rsync` tras cada copia:
+
+```bash
+# Con el NAS montado (NFS/SMB) — el plan definitivo:
+30 3 * * * OFFSITE=/mnt/nas/wacrm /opt/containers/wacrm/deploy/homelab/backup.sh >> /var/log/wacrm-backup.log 2>&1
+
+# Por SSH a otra máquina de la tailnet — interino, gratis:
+30 3 * * * OFFSITE=usuario@casa-server:backups/wacrm /opt/containers/wacrm/deploy/homelab/backup.sh >> ...
+```
+
+Para el destino por SSH hay una clave dedicada en
+`/root/.ssh/id_ed25519_backup` (creada sin passphrase, solo para esto);
+basta con autorizar su `.pub` en el destino.
+
+### Restaurar
+
+```bash
+zcat /var/backups/wacrm/db-AAAAMMDD-HHMM.sql.gz \
+  | docker exec -i supabase-db psql -U postgres -d postgres
+```
+
+El volcado lleva `--clean --if-exists`, así que se restaura sobre una base
+que ya tenga datos sin vaciarla antes. **Pruébalo una vez al mes contra un
+contenedor aparte**: una copia que nunca se ha restaurado es una
+hipótesis, no una copia.
 
 ## Operación diaria
 
